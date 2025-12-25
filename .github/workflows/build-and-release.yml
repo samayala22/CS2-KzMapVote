@@ -1,0 +1,117 @@
+name: Build and Release
+
+on: 
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  versioning:
+    runs-on: ubuntu-latest
+    outputs:
+      semVer: ${{ steps.version_step.outputs.semVer }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup GitVersion
+      uses: gittools/actions/gitversion/setup@v3.0.0
+      with:
+        versionSpec: '5.x'
+    
+    - name: Determine Version
+      id: version_step
+      uses: gittools/actions/gitversion/execute@v3.0.0
+
+  build:
+    needs: versioning
+    runs-on: ubuntu-latest
+    env:
+      SEMVER: ${{ needs.versioning.outputs.semVer }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+    
+    - name: Update Version in Source Code
+      run: |
+        find . -name "*.cs" -type f | while read file; do
+          if grep -q 'WORKFLOW_VERSION' "$file"; then
+            echo "Updating version in $(basename "$file")"
+            sed -i 's/WORKFLOW_VERSION/${{ env.SEMVER }}/g' "$file"
+          fi
+        done
+    
+    - name: Build
+      run: dotnet publish -c Release -p:Version=${{ env.SEMVER }} -p:DefineConstants="WORKFLOW" 
+    
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.event.repository.name }}-${{ env.SEMVER }}
+        path: build/${{ github.event.repository.name }}.zip
+
+  release:
+    if: github.ref == 'refs/heads/main'
+    needs: [versioning, build]
+    runs-on: ubuntu-latest
+    env:
+      SEMVER: ${{ needs.versioning.outputs.semVer }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Create tag
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        
+        if ! git rev-parse -q --verify "refs/tags/v${{ env.SEMVER }}" >/dev/null; then
+          git tag -a "v${{ env.SEMVER }}" -m "Release v${{ env.SEMVER }}"
+          git push origin "v${{ env.SEMVER }}"
+        fi
+    
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ github.event.repository.name }}-${{ env.SEMVER }}
+        path: ./release
+
+    - name: Get commit summary
+      id: commits
+      run: |
+        PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        
+        if [ -n "$PREV_TAG" ]; then
+          COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"• %s (%h)")
+        else
+          COMMITS=$(git log -15 --pretty=format:"• %s (%h)")
+        fi
+        
+        echo "summary<<EOF" >> $GITHUB_OUTPUT
+        echo "${COMMITS:-No commits available}" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: release/${{ github.event.repository.name }}.zip
+        tag_name: v${{ env.SEMVER }}
+        name: Release v${{ env.SEMVER }}
+        body: |
+          ## Release v${{ env.SEMVER }}
+          
+          ### Changes:
+          ${{ steps.commits.outputs.summary }}
