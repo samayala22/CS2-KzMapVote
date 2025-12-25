@@ -1,28 +1,22 @@
 <div align="center">
   <img src="https://pan.samyyc.dev/s/VYmMXE" />
   <h2><strong>KzMapVote</strong></h2>
-  <h3>No description.</h3>
+  <h3>Voting system for CS2KZ servers</h3>
 </div>
 
 <p align="center">
   <img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build Status">
-  <img src="https://img.shields.io/github/downloads/Praetor/KzMapVote/total" alt="Downloads">
-  <img src="https://img.shields.io/github/stars/Praetor/KzMapVote?style=flat&logo=github" alt="Stars">
-  <img src="https://img.shields.io/github/license/Praetor/KzMapVote" alt="License">
+  <img src="https://img.shields.io/github/downloads/samayala22/CS2-KzMapVote/total" alt="Downloads">
+  <img src="https://img.shields.io/github/stars/samayala22/CS2-KzMapVote?style=flat&logo=github" alt="Stars">
+  <img src="https://img.shields.io/github/license/samayala22/CS2-KzMapVote" alt="License">
 </p>
 
-## Getting Started (delete me)
+## Features
 
-1. **Edit `PluginMetadata` Attribute**  
-   - Set your plugin's `Id`, `Name`, `Version`, `Author` and `Description`.
-2. **Edit `KzMapVote.csproj`**  
-   - Set the `<AssemblyName>` property to match your plugin's main class name.
-   - Add any additional dependencies as needed.
-3. **Implement your plugin logic** in C#.
-   - Place your main plugin class in the root of the project.
-   - Use the SwiftlyS2 managed API to interact with the game and core.
-4. **Add resources**  
-   - Place any required files in the `gamedata`, `templates`, or `translations` folders as needed.
+- !rtv system with center panel menu
+- !nominate with partial map name matching or using workshop map ID
+- Track other vote count for each map
+- Fetches maps + tier from the CS2KZ global api directly
 
 ## Building
 
