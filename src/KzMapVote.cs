@@ -111,9 +111,9 @@ public partial class KzMapVote : BasePlugin {
         m_provider = services.BuildServiceProvider();
         m_config = m_provider.GetRequiredService<IOptions<MainConfigModel>>().Value;
 
-        Task.Run(FetchMapPool);
         Core.Event.OnMapLoad += (@event) => {
             m_map_changing = false;
+            Task.Run(async () => m_map_pool = await ApiGetMaps());
         };
         Core.Event.OnClientDisconnected += (@event) => {
             bool had = m_player_votes.Remove(@event.PlayerId, out int prev);
@@ -138,9 +138,18 @@ public partial class KzMapVote : BasePlugin {
         m_vote_remaining -= 1.0f;
     }
 
-    private async Task FetchMapPool() {
+    private async Task<List<MapEntry>> ApiGetMaps(string? name = null, string? state = "approved", int? limit = null, int? offset = null) {
         try {
-            string response = await m_http_client.GetStringAsync("https://api.cs2kz.org/maps");
+            var query = new List<string>();
+            if (name is not null) query.Add($"name={Uri.EscapeDataString(name)}");
+            if (state is not null) query.Add($"state={Uri.EscapeDataString(state)}");
+            if (limit is not null) query.Add($"limit={limit}");
+            if (offset is not null) query.Add($"offset={offset}");
+
+            string url = "https://api.cs2kz.org/maps";
+            if (query.Count > 0) url += "?" + string.Join("&", query);
+
+            string response = await m_http_client.GetStringAsync(url);
             using JsonDocument doc = JsonDocument.Parse(response);
 
             var maps = new List<MapEntry>();
@@ -152,25 +161,24 @@ public partial class KzMapVote : BasePlugin {
                     continue;
                 }
 
-                string? name = nameProp.GetString();
+                string? mapName = nameProp.GetString();
                 long workshopId = idProp.GetInt64();
-                string? Tier = courses[0]
+                string? tier = courses[0]
                     .GetProperty("filters")
                     .GetProperty("classic")
                     .GetProperty("nub_tier")
                     .GetString();
 
-                if (name is null || Tier is null) continue;
+                if (mapName is null || tier is null) continue;
                 maps.Add(new MapEntry {
-                    Name = name,
+                    Name = mapName,
                     WorkshopID = workshopId,
-                    Tier = Utils.MapTierToInt(Tier)
+                    Tier = Utils.MapTierToInt(tier)
                 });
             }
-            m_map_pool = maps; // old list is GC'ed
-        }
-        catch {
-            _ = Core.PlayerManager.SendChatAsync("Error fetching map pool");
+            return maps;
+        } catch {
+            return new List<MapEntry>();
         }
     }
 
@@ -372,12 +380,7 @@ public partial class KzMapVote : BasePlugin {
                 }
                 entry = new MapEntry { Name = map_name, WorkshopID = long.Parse(input), Tier = -1 };
             } else {
-                await FetchMapPool();
-                var pool = m_map_pool; // reference capture
-                var matches = pool
-                    .Where(m => m.Name.Contains(input, StringComparison.OrdinalIgnoreCase))
-                    .Take(2)
-                    .ToList();
+                var matches = await ApiGetMaps(name: input, limit: 2);
 
                 if (matches.Count == 0) {
                     _ = ctx.Sender.SendChatAsync("No maps found.");
