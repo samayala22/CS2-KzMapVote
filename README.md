@@ -15,7 +15,6 @@
 
 - !rtv system with center panel menu
 - !nominate with partial map name matching or using workshop map ID
-- Track other vote count for each map
 - Fetches maps + tier from the CS2KZ global api directly
 
 ## Building
