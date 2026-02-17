@@ -184,9 +184,10 @@ public partial class KzMapVote : BasePlugin {
 
     async Task<string?> GetWorkshopTitle(string steamApiKey, string workshopId)
     {
+        var key_param = string.IsNullOrEmpty(steamApiKey) ? "" : $"key={steamApiKey}&";
+        var url = $"https://api.steampowered.com/IPublishedFileService/GetDetails/v1/?{key_param}publishedfileids[0]={workshopId}";
         try {
-            var key_param = string.IsNullOrEmpty(steamApiKey) ? "" : $"key={steamApiKey}&";
-            var response = await m_http_client.GetStringAsync($"https://api.steampowered.com/IPublishedFileService/GetDetails/v1/?{key_param}publishedfileids[0]={workshopId}");
+            var response = await m_http_client.GetStringAsync(url);
             var doc = JsonDocument.Parse(response);
             
             return doc.RootElement
@@ -196,6 +197,7 @@ public partial class KzMapVote : BasePlugin {
                 .GetString();
         } catch (Exception e) {
             Core.Logger.LogError(e, $"Error fetching workshop title for workshop ID {workshopId}");
+            Core.Logger.LogError($"URL: {url}");
             return null;
         }
     }
@@ -327,7 +329,12 @@ public partial class KzMapVote : BasePlugin {
     public void RequestVote(ICommandContext ctx) {
         if (ctx.Sender is null) return;
         if (m_rtv) {
-            ctx.Sender.SendChat("Vote already in progress.");
+            IMenuAPI? currentMenu = Core.MenusAPI.GetCurrentMenu(ctx.Sender);
+            if (currentMenu != null && currentMenu == m_menu) {
+                ctx.Sender.SendChat("Vote already in progress.");
+            } else if (m_menu != null) {
+                Core.MenusAPI.OpenMenuForPlayer(ctx.Sender, m_menu);
+            }
             return;
         }
         if (m_map_changing) {
