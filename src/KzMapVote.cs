@@ -78,7 +78,7 @@ public partial class KzMapVote : BasePlugin {
     CancellationTokenSource? m_vote_timer_token;
     
     // RTV data
-    float m_vote_remaining = 0.0f;
+    float m_vote_remaining = 0.0f; // remaining vote time in seconds
     bool m_rtv = false; // is rtv active
     bool m_map_changing = false; // is map changing
     HashSet<int> m_rtv_players = new(64); // playerIDs who requested rtv
@@ -112,8 +112,16 @@ public partial class KzMapVote : BasePlugin {
         m_config = m_provider.GetRequiredService<IOptions<MainConfigModel>>().Value;
 
         Core.Event.OnMapLoad += (@event) => {
+            ResetVoteState();
             m_map_changing = false;
-            Task.Run(async () => m_map_pool = await ApiGetMaps());
+            Task.Run(async () => {
+                var maps = await ApiGetMaps();
+                if (maps.Count > 0) {
+                    m_map_pool = maps; // only swap if the api succeeded in fetching maps to avoid emptying the pool on api failure
+                } else {
+                    Core.Logger.LogWarning("Map pool refresh failed; keeping previous pool.");
+                }
+            });
         };
         Core.Event.OnClientDisconnected += (@event) => {
             bool had = m_player_votes.Remove(@event.PlayerId, out int prev);
@@ -136,6 +144,25 @@ public partial class KzMapVote : BasePlugin {
         
         m_menu.Configuration.Title = $"Map Vote ({m_vote_remaining:0}s)";
         m_vote_remaining -= 1.0f;
+    }
+
+    private void ResetVoteState() {
+        m_vote_remaining = 0.0f;
+        m_vote_timer_token?.Cancel();
+        m_vote_timer_token = null;
+
+        if (m_menu is not null)
+        {
+            Core.MenusAPI.CloseMenu(m_menu);
+            m_menu = null;
+        }
+
+        m_player_votes.Clear();
+        m_rtv_players.Clear();
+        m_map_nominations.Clear();
+        Array.Clear(m_voting_count);
+        Array.Clear(m_voting_options);
+        m_rtv = false;
     }
 
     private async Task<List<MapEntry>> ApiGetMaps(string? name = null, string? state = "approved", int? limit = null, int? offset = null) {
@@ -248,18 +275,11 @@ public partial class KzMapVote : BasePlugin {
     }
 
     public void EndVote() {
-        m_rtv = false;
-        // Stop the countdown timer
-        m_vote_timer_token?.Cancel();
-        m_vote_timer_token = null;
-
-        if (m_menu is null) return;
-        Core.MenusAPI.CloseMenu(m_menu);
-
-        m_map_nominations.Clear();
-
         int winning_map_votes = m_voting_count.Max();
         int winning_map_idx = Array.IndexOf(m_voting_count, winning_map_votes);
+        MapEntry winning_map = m_voting_options[winning_map_idx];
+
+        ResetVoteState();
 
         if (winning_map_votes == 0) {
             Core.PlayerManager.SendChat("Voting ended and no option was selected");
@@ -272,26 +292,21 @@ public partial class KzMapVote : BasePlugin {
         }
 
         m_map_changing = true;
-        MapEntry winning_map = m_voting_options[winning_map_idx];
         Core.PlayerManager.SendChat($"Voting ended! The selected map is {winning_map.Name} with {winning_map_votes} vote(s).");
-        Core.Scheduler.DelayBySeconds(3.0f, () => {
+        Core.Scheduler.DelayBySeconds(1.0f, () => {
             Core.Engine.ExecuteCommand($"host_workshop_map {winning_map.WorkshopID}");
         });
     }
 
-    public void StartVote() {
-        m_rtv = true;
+    public bool StartVote() {
         var pool = m_map_pool; // reference so no risk of modification in nominate thread
         
         // Check that map pool is populated
-        if (pool.Count < 5) {
-            Core.PlayerManager.SendChat("API error while fetching maps");
-            return;
+        if (pool.Count < m_options_nb) {
+            Core.PlayerManager.SendChat("Not enough maps in pool to start vote");
+            Core.Logger.LogError("Not enough maps in pool to start vote");
+            return false;
         }
-
-        m_player_votes.Clear();
-        Array.Clear(m_voting_options);
-        Array.Clear(m_voting_count);
 
         // Replace the first elements with nominations
         for (int i = 0; i < m_map_nominations.Count; i++) {
@@ -316,13 +331,18 @@ public partial class KzMapVote : BasePlugin {
         };
 
         BuildMenu();
-        if (m_menu is null) return;
+        if (m_menu is null) {
+            Core.Logger.LogError("Failed to build menu");
+            return false;
+        }
 
         // Set up the countdown timer (updates every second)
+        m_rtv = true;
         m_vote_remaining = m_config.VoteDuration;
         m_vote_timer_token = Core.Scheduler.RepeatBySeconds(1.0f, UpdateVoteTimer);
         Core.Scheduler.StopOnMapChange(m_vote_timer_token);
         Core.MenusAPI.OpenMenu(m_menu);
+        return true;
     }
 
     [Command("rtv")]
@@ -345,10 +365,13 @@ public partial class KzMapVote : BasePlugin {
         int required_votes = Core.PlayerManager.PlayerCount / 2 + 1;
         Core.PlayerManager.SendChat($"RTV requested: ({m_rtv_players.Count}/{required_votes} votes)");
 
-        if (m_rtv_players.Count == required_votes) {
-            Core.PlayerManager.SendChat($"Starting map vote for {m_config.VoteDuration} seconds...");
-            StartVote();
-            m_rtv_players.Clear();
+        if (m_rtv_players.Count >= required_votes) {
+            if (StartVote()) {
+                Core.PlayerManager.SendChat($"Starting map vote for {m_config.VoteDuration} seconds...");
+            } else {
+                Core.PlayerManager.SendChat("Failed to start map vote.");
+                ResetVoteState();
+            }
         }
     }
 
@@ -402,7 +425,7 @@ public partial class KzMapVote : BasePlugin {
 
             // Schedule on main thread to avoid Contains conflict
             Core.Scheduler.NextTick(() => {
-                if (m_map_nominations.Contains(entry)) {
+                if (m_map_nominations.Any(x => x.WorkshopID == entry.WorkshopID)) {
                     _ = ctx.Sender.SendChatAsync("Map already nominated.");
                     return;
                 }
