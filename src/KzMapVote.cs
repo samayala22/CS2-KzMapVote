@@ -67,6 +67,7 @@ record MapEntry {
     Author = "Praetor",
     Description = "Map voting system for KZ servers"
 )]
+
 public partial class KzMapVote : BasePlugin {
     const int m_options_nb = 5;
 
