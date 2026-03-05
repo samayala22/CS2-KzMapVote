@@ -1,7 +1,7 @@
 <div align="center">
   <img src="https://pan.samyyc.dev/s/VYmMXE" />
   <h2><strong>KzMapVote</strong></h2>
-  <h3>Voting system for CS2KZ servers</h3>
+  <h3>Map voting system for CS2KZ servers</h3>
 </div>
 
 <p align="center">
