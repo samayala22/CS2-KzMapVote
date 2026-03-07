@@ -56,6 +56,13 @@ record MapEntry {
     public int Tier { get; set; } = -1;
 }
 
+enum VoteState
+{
+    Idle,
+    Voting,
+    ChangingMap
+}
+
 [PluginMetadata(
     Id = "KzMapVote",
     #if WORKFLOW
@@ -77,11 +84,11 @@ public partial class KzMapVote : BasePlugin {
     Random m_rng = new();
     HttpClient m_http_client = new();
     CancellationTokenSource? m_vote_timer_token;
+    CancellationTokenSource? m_map_change_timeout_token;
     
     // RTV data
     float m_vote_remaining = 0.0f; // remaining vote time in seconds
-    bool m_rtv = false; // is rtv active
-    bool m_map_changing = false; // is map changing
+    VoteState m_vote_state = VoteState.Idle;
     HashSet<int> m_rtv_players = new(64); // playerIDs who requested rtv
 
     // Voting data
@@ -114,7 +121,7 @@ public partial class KzMapVote : BasePlugin {
 
         Core.Event.OnMapLoad += (@event) => {
             ResetVoteState();
-            m_map_changing = false;
+            ResetMapChangeState();
             Task.Run(async () => {
                 var maps = await ApiGetMaps();
                 if (maps.Count > 0) {
@@ -163,7 +170,13 @@ public partial class KzMapVote : BasePlugin {
         m_map_nominations.Clear();
         Array.Clear(m_voting_count);
         Array.Clear(m_voting_options);
-        m_rtv = false;
+        m_vote_state = VoteState.Idle;
+    }
+
+    private void ResetMapChangeState() {
+        m_map_change_timeout_token?.Cancel();
+        m_map_change_timeout_token = null;
+        m_vote_state = VoteState.Idle;
     }
 
     private async Task<List<MapEntry>> ApiGetMaps(string? name = null, string? state = "approved", int? limit = null, int? offset = null) {
@@ -205,7 +218,8 @@ public partial class KzMapVote : BasePlugin {
                 });
             }
             return maps;
-        } catch {
+        } catch (Exception e) {
+            Core.Logger.LogError(e, "Error fetching maps from API");
             return new List<MapEntry>();
         }
     }
@@ -225,7 +239,6 @@ public partial class KzMapVote : BasePlugin {
                 .GetString();
         } catch (Exception e) {
             Core.Logger.LogError(e, $"Error fetching workshop title for workshop ID {workshopId}");
-            Core.Logger.LogError($"URL: {url}");
             return null;
         }
     }
@@ -236,12 +249,13 @@ public partial class KzMapVote : BasePlugin {
             .SetPlayerFrozen(false)
             .EnableSound()
             .SetSelectButton(KeyBind.E)
+            .SetMoveForwardButton(KeyBind.F)
             .SetMoveBackwardButton(KeyBind.Shift)
             .SetExitButton(KeyBind.Tab);
 
         builder
             .Design.SetMenuTitle("Map Vote")
-            .Design.SetMaxVisibleItems(5)            // Set max visible items per page (1-5)
+            .Design.SetMaxVisibleItems(m_options_nb)            // Set max visible items per page (1-5)
             .Design.SetMenuTitleVisible(true)        // Show/hide title
             .Design.SetMenuFooterVisible(true);       // Show/hide footer
         
@@ -283,7 +297,7 @@ public partial class KzMapVote : BasePlugin {
         ResetVoteState();
 
         if (winning_map_votes == 0) {
-            Core.PlayerManager.SendChat("Voting ended and no option was selected");
+            Core.PlayerManager.SendChat("Voting ended and no option was selected.");
             return;
         }
 
@@ -292,8 +306,15 @@ public partial class KzMapVote : BasePlugin {
             return;
         }
 
-        m_map_changing = true;
+        m_vote_state = VoteState.ChangingMap;
         Core.PlayerManager.SendChat($"Voting ended! The selected map is {winning_map.Name} with {winning_map_votes} vote(s).");
+        
+        m_map_change_timeout_token = Core.Scheduler.DelayBySeconds(90.0f, () => {
+            if (m_vote_state != VoteState.ChangingMap) return;
+            ResetMapChangeState();
+            Core.PlayerManager.SendChat("Map change failed or timed out. RTV is available again.");
+        });
+
         Core.Scheduler.DelayBySeconds(1.0f, () => {
             Core.Engine.ExecuteCommand($"host_workshop_map {winning_map.WorkshopID}");
         });
@@ -305,7 +326,6 @@ public partial class KzMapVote : BasePlugin {
         // Check that map pool is populated
         if (pool.Count < m_options_nb) {
             Core.PlayerManager.SendChat("Not enough maps in pool to start vote");
-            Core.Logger.LogError("Not enough maps in pool to start vote");
             return false;
         }
 
@@ -338,7 +358,7 @@ public partial class KzMapVote : BasePlugin {
         }
 
         // Set up the countdown timer (updates every second)
-        m_rtv = true;
+        m_vote_state = VoteState.Voting;
         m_vote_remaining = m_config.VoteDuration;
         m_vote_timer_token = Core.Scheduler.RepeatBySeconds(1.0f, UpdateVoteTimer);
         Core.Scheduler.StopOnMapChange(m_vote_timer_token);
@@ -349,7 +369,7 @@ public partial class KzMapVote : BasePlugin {
     [Command("rtv")]
     public void RequestVote(ICommandContext ctx) {
         if (ctx.Sender is null) return;
-        if (m_rtv) {
+        if (m_vote_state == VoteState.Voting) {
             IMenuAPI? currentMenu = Core.MenusAPI.GetCurrentMenu(ctx.Sender);
             if (currentMenu != null && currentMenu == m_menu) {
                 ctx.Sender.SendChat("Vote already in progress.");
@@ -358,7 +378,7 @@ public partial class KzMapVote : BasePlugin {
             }
             return;
         }
-        if (m_map_changing) {
+        if (m_vote_state == VoteState.ChangingMap) {
             ctx.Sender.SendChat("Map is changing, please wait.");
             return;
         }
@@ -380,11 +400,11 @@ public partial class KzMapVote : BasePlugin {
     [CommandAlias("nom")]
     public void Nominate(ICommandContext ctx) {
         if (ctx.Sender is null) return;
-        if (m_rtv) {
+        if (m_vote_state == VoteState.Voting) {
             ctx.Sender.SendChat("Vote already in progress.");
             return;
         }
-        if (m_map_changing) {
+        if (m_vote_state == VoteState.ChangingMap) {
             ctx.Sender.SendChat("Map is changing, please wait.");
             return;
         }
