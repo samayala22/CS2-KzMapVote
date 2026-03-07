@@ -249,8 +249,8 @@ public partial class KzMapVote : BasePlugin {
             .SetPlayerFrozen(false)
             .EnableSound()
             .SetSelectButton(KeyBind.E)
-            .SetMoveForwardButton(KeyBind.F)
-            .SetMoveBackwardButton(KeyBind.Shift)
+            .SetMoveForwardButton(KeyBind.Shift)
+            .SetMoveBackwardButton(KeyBind.F)
             .SetExitButton(KeyBind.Tab);
 
         builder
