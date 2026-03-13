@@ -20,6 +20,7 @@ using SwiftlyS2.Core.Menus;
 using SwiftlyS2.Core.Menus.OptionsBase;
 
 using Tomlyn.Extensions.Configuration;
+using Spectre.Console.Rendering;
 
 namespace KzMapVote;
 
@@ -144,6 +145,10 @@ public partial class KzMapVote : BasePlugin {
 
     private void UpdateVoteTimer() {
         if (m_menu is null) return;
+
+        if (Core.PlayerManager.PlayerCount == m_player_votes.Count) {
+            m_vote_remaining = Math.Min(m_vote_remaining, 5.0f);
+        }
         
         if (m_vote_remaining <= 0) {
             EndVote();
