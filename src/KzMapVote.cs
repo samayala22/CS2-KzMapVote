@@ -229,22 +229,28 @@ public partial class KzMapVote : BasePlugin {
         }
     }
 
-    async Task<string?> GetWorkshopTitle(string steamApiKey, string workshopId)
-    {
+    async Task<(string? title, string? rejection)> GetWorkshopDetails(string steamApiKey, string workshopId){
         var key_param = string.IsNullOrEmpty(steamApiKey) ? "" : $"key={steamApiKey}&";
         var url = $"https://api.steampowered.com/IPublishedFileService/GetDetails/v1/?{key_param}publishedfileids[0]={workshopId}";
         try {
             var response = await m_http_client.GetStringAsync(url);
             var doc = JsonDocument.Parse(response);
-            
-            return doc.RootElement
+
+            var details = doc.RootElement
                 .GetProperty("response")
-                .GetProperty("publishedfiledetails")[0]
-                .GetProperty("title")
-                .GetString();
+                .GetProperty("publishedfiledetails")[0];
+
+            if (details.TryGetProperty("result", out var result) && result.GetInt32() != 1)
+                return (null, "Workshop item not found.");
+
+            if (details.TryGetProperty("incompatible", out var incompat) && incompat.GetBoolean())
+                return (null, "This is a CS:GO map, not compatible with CS2.");
+
+            var title = details.GetProperty("title").GetString();
+            return (title, null);
         } catch (Exception e) {
-            Core.Logger.LogError(e, $"Error fetching workshop title for workshop ID {workshopId}");
-            return null;
+            Core.Logger.LogError(e, "Error fetching workshop details");
+            return (null, "Failed to query Steam API.");
         }
     }
 
@@ -425,9 +431,9 @@ public partial class KzMapVote : BasePlugin {
         Task.Run(async () => {
             MapEntry entry;
             if (Utils.IsWorkshopID(input)) {
-                string? map_name = await GetWorkshopTitle(m_config.SteamApiKey, input);
+                var (map_name, rejection_reason) = await GetWorkshopDetails(m_config.SteamApiKey, input);
                 if (map_name is null) {
-                    _ = ctx.Sender.SendChatAsync("Can't find workshop map");
+                    _ = ctx.Sender.SendChatAsync(rejection_reason ?? "Invalid workshop ID.");
                     return;
                 }
                 if (!map_name.StartsWith("kz_")) {
