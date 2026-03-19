@@ -273,7 +273,7 @@ public partial class KzMapVote : BasePlugin {
             var details = body.GetProperty("publishedfiledetails")[0];
             if (details.TryGetProperty("result", out var result) && result.GetInt32() != 1)
                 return (null, "Workshop item not found.");
-            var workshopId = details.GetProperty("publishedfileid").GetInt64().ToString();
+            var workshopId = details.GetProperty("publishedfileid").GetString();
             return (workshopId, null);
         } catch (Exception e) {
             Core.Logger.LogError(e, "Error querying Steam files");
