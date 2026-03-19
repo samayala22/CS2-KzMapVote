@@ -229,9 +229,12 @@ public partial class KzMapVote : BasePlugin {
         }
     }
 
-    async Task<(string? title, string? rejection)> GetWorkshopDetails(string steamApiKey, string workshopId){
-        var key_param = string.IsNullOrEmpty(steamApiKey) ? "" : $"key={steamApiKey}&";
-        var url = $"https://api.steampowered.com/IPublishedFileService/GetDetails/v1/?{key_param}publishedfileids[0]={workshopId}";
+    async Task<(string? title, string? rejection)> SteamGetDetails(string steamApiKey, string workshopId)
+    {
+        if (string.IsNullOrEmpty(steamApiKey)) {
+            return (null, "Steam API key is required to query files.");
+        }
+        var url = $"https://api.steampowered.com/IPublishedFileService/GetDetails/v1/?key={steamApiKey}&publishedfileids[0]={workshopId}";
         try {
             var response = await m_http_client.GetStringAsync(url);
             var doc = JsonDocument.Parse(response);
@@ -250,6 +253,30 @@ public partial class KzMapVote : BasePlugin {
             return (title, null);
         } catch (Exception e) {
             Core.Logger.LogError(e, "Error fetching workshop details");
+            return (null, "Failed to query Steam API.");
+        }
+    }
+
+    async Task<(string? workshopId, string? rejection)> SteamQueryFiles(string steamApiKey, string query)
+    {
+        if (string.IsNullOrEmpty(steamApiKey)) {
+            return (null, "Steam API key is required to query files.");
+        }
+        var url = $"https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/?key={steamApiKey}&query_type=0&appid=730&search_text={query}&numperpage=1";
+        try {
+            var response = await m_http_client.GetStringAsync(url);
+            var doc = JsonDocument.Parse(response);
+
+            var body = doc.RootElement.GetProperty("response");
+            if (body.TryGetProperty("total", out var total) && total.GetInt32() == 0)
+                return (null, "Workshop item not found.");
+            var details = body.GetProperty("publishedfiledetails")[0];
+            if (details.TryGetProperty("result", out var result) && result.GetInt32() != 1)
+                return (null, "Workshop item not found.");
+            var workshopId = details.GetProperty("publishedfileid").GetInt64().ToString();
+            return (workshopId, null);
+        } catch (Exception e) {
+            Core.Logger.LogError(e, "Error querying Steam files");
             return (null, "Failed to query Steam API.");
         }
     }
@@ -431,7 +458,7 @@ public partial class KzMapVote : BasePlugin {
         Task.Run(async () => {
             MapEntry entry;
             if (Utils.IsWorkshopID(input)) {
-                var (map_name, rejection_reason) = await GetWorkshopDetails(m_config.SteamApiKey, input);
+                var (map_name, rejection_reason) = await SteamGetDetails(m_config.SteamApiKey, input);
                 if (map_name is null) {
                     _ = ctx.Sender.SendChatAsync(rejection_reason ?? "Invalid workshop ID.");
                     return;
@@ -444,15 +471,33 @@ public partial class KzMapVote : BasePlugin {
             } else {
                 var matches = await ApiGetMaps(name: input, limit: 2);
 
-                if (matches.Count == 0) {
-                    _ = ctx.Sender.SendChatAsync("No maps found.");
-                    return;
-                }
-                if (matches.Count > 1) {
+                if (matches.Count == 1) {
+                    entry = matches[0];
+                } else if (matches.Count == 0) {
+                    if (!input.StartsWith("kz_")) {
+                        _ = ctx.Sender.SendChatAsync("No maps found.");
+                        return;
+                    } else {
+                        var (workshopId, rejectionReason) = await SteamQueryFiles(m_config.SteamApiKey, input);
+                        if (workshopId is null) {
+                            _ = ctx.Sender.SendChatAsync(rejectionReason ?? "No maps found.");
+                            return;
+                        }
+                        var (map_name, detailsRejection) = await SteamGetDetails(m_config.SteamApiKey, workshopId);
+                        if (map_name is null) {
+                            _ = ctx.Sender.SendChatAsync(detailsRejection ?? "Failed to get map details.");
+                            return;
+                        }
+                        if (map_name != input) {
+                            _ = ctx.Sender.SendChatAsync($"Workshop map not found");
+                            return;
+                        }
+                        entry = new MapEntry { Name = map_name, WorkshopID = long.Parse(workshopId), Tier = -1 };
+                    }
+                } else {
                     _ = ctx.Sender.SendChatAsync("Multiple maps found.");
                     return;
                 }
-                entry = matches[0];
             }
 
             // Schedule on main thread to avoid Contains conflict
