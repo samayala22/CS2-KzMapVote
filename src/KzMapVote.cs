@@ -57,24 +57,17 @@ static class Utils {
             _ => 0,
         };
     }
-
-    public static bool IsWorkshopID(string input) {
-        return input.Length == 10 && input.All(char.IsDigit);
-    }
 }
 
 static class MapResolver
 {
+    const long SteamWorkshopCreatedAfter = 1695772800; // 2023-09-27, CS2 release date
+
     public static async Task<(MapEntry? entry, string? err)> Resolve(HttpClient http, string steamApiKey, string input)
     {   
-        string? err;
-        if (Utils.IsWorkshopID(input)) {
-            (var mapName, err) = await SteamGetDetails(http, steamApiKey, input);
-            if (err is not null) return (null, err);
-            if (!mapName!.StartsWith("kz_")) return (null, "Only kz_ maps can be nominated.");
-            return (new MapEntry { Name = mapName, WorkshopID = long.Parse(input), Tier = -1 }, null);
-        }
+        if (input.All(char.IsDigit)) return (null, "Workshop IDs are no longer supported. Nominate by map name.");
 
+        string? err;
         (var matches, err) = await ApiGetMaps(http, name: input, limit: 2);
         if (err is not null) return (null, err);
         if (matches.Count == 1) return (matches[0], null);
@@ -82,14 +75,9 @@ static class MapResolver
 
         if (!input.StartsWith("kz_")) return (null, "No maps found.");
 
-        (var workshopId, err) = await SteamQueryFiles(http, steamApiKey, input);
+        (var workshopEntry, err) = await SteamQueryFiles(http, steamApiKey, input);
         if (err is not null) return (null, err);
-
-        (var name, err) = await SteamGetDetails(http, steamApiKey, workshopId);
-        if (err is not null) return (null, err);
-        if (name != input) return (null, "Workshop map doesn't match the input.");
-
-        return (new MapEntry { Name = name, WorkshopID = long.Parse(workshopId), Tier = -1 }, null);
+        return (workshopEntry, null);
     }
 
     public static async Task<(List<MapEntry> maps, string? err)> ApiGetMaps(HttpClient http, string? name = null, string? state = "approved", int? limit = null, int? offset = null)
@@ -137,55 +125,42 @@ static class MapResolver
         }
     }
 
-    static async Task<(string title, string? err)> SteamGetDetails(HttpClient http, string steamApiKey, string workshopId)
+    static async Task<(MapEntry? entry, string? err)> SteamQueryFiles(HttpClient http, string steamApiKey, string query)
     {
         if (string.IsNullOrEmpty(steamApiKey)) {
-            return ("", "Steam API key is required to query files.");
+            return (null, "Steam API key is required to query files.");
         }
-        var url = $"https://api.steampowered.com/IPublishedFileService/GetDetails/v1/?key={steamApiKey}&publishedfileids[0]={workshopId}";
+        var url = $"https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/?key={steamApiKey}&query_type=0&appid=730&search_text={Uri.EscapeDataString(query)}&numperpage=3&return_metadata=true";
         try {
             var response = await http.GetStringAsync(url);
-            var doc = JsonDocument.Parse(response);
-
-            var details = doc.RootElement
-                .GetProperty("response")
-                .GetProperty("publishedfiledetails")[0];
-
-            if (details.TryGetProperty("result", out var result) && result.GetInt32() != 1)
-                return ("", "Workshop item not found.");
-
-            if (details.TryGetProperty("incompatible", out var incompat) && incompat.GetBoolean())
-                return ("", "This is a CS:GO map, not compatible with CS2.");
-
-            var title = details.GetProperty("title").GetString();
-            if (string.IsNullOrEmpty(title)) return ("", "Workshop item has no title.");
-            return (title, null);
-        } catch (Exception e) {
-            return ("", $"Failed to query Steam API (GetDetails): {e.Message}");
-        }
-    }
-
-    static async Task<(string workshopId, string? err)> SteamQueryFiles(HttpClient http, string steamApiKey, string query)
-    {
-        if (string.IsNullOrEmpty(steamApiKey)) {
-            return ("", "Steam API key is required to query files.");
-        }
-        var url = $"https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/?key={steamApiKey}&query_type=0&appid=730&search_text={query}&numperpage=1";
-        try {
-            var response = await http.GetStringAsync(url);
-            var doc = JsonDocument.Parse(response);
+            using var doc = JsonDocument.Parse(response);
 
             var body = doc.RootElement.GetProperty("response");
             if (body.TryGetProperty("total", out var total) && total.GetInt32() == 0)
-                return ("", "Workshop item not found.");
-            var details = body.GetProperty("publishedfiledetails")[0];
-            if (details.TryGetProperty("result", out var result) && result.GetInt32() != 1)
-                return ("", "Workshop item not found.");
-            var workshopId = details.GetProperty("publishedfileid").GetString();
-            if (string.IsNullOrEmpty(workshopId)) return ("", "Workshop item has no ID.");
-            return (workshopId, null);
+                return (null, "Workshop item not found.");
+
+            if (!body.TryGetProperty("publishedfiledetails", out var publishedFileDetails))
+                return (null, "Workshop item not found.");
+
+            foreach (var details in publishedFileDetails.EnumerateArray()) {
+                if (details.TryGetProperty("result", out var result) && result.GetInt32() != 1) continue;
+
+                if (!details.TryGetProperty("title", out var titleProp)) continue;
+                var title = titleProp.GetString();
+                if (string.IsNullOrEmpty(title) || title != query) continue;
+
+                if (!details.TryGetProperty("time_created", out var timeCreated) || !timeCreated.TryGetInt64(out var createdAt) || createdAt <= SteamWorkshopCreatedAfter) continue;
+
+                if (!details.TryGetProperty("publishedfileid", out var workshopIdProp)) continue;
+                var workshopId = workshopIdProp.GetString();
+                if (string.IsNullOrEmpty(workshopId)) continue;
+
+                return (new MapEntry { Name = title, WorkshopID = long.Parse(workshopId), Tier = -1 }, null);
+            }
+
+            return (null, "Workshop map not found.");
         } catch (Exception e) {
-            return ("", $"Failed to query Steam API (QueryFiles): {e.Message}");
+            return (null, $"Failed to query Steam API (QueryFiles): {e.Message}");
         }
     }
 }
@@ -475,7 +450,7 @@ public partial class KzMapVote : BasePlugin {
             return;
         }
         if (!(ctx.Args.Length == 1 && ctx.Args[0] != "")) {
-            ctx.Sender.SendChat("Usage: !nominate <map_name|workshop_id>");
+            ctx.Sender.SendChat("Usage: !nominate <map_name>");
             return;
         }
         if (m_map_nominations.Count >= m_options_nb - 1) {

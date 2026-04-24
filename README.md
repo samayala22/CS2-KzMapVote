@@ -14,7 +14,7 @@
 ## Features
 
 - !rtv system with center panel menu
-- !nominate with partial map name matching or using workshop map ID
+- !nominate global/workshop maps with partial name matching
 - Fetches maps + tier from the CS2KZ global api directly
 
 ## Building
