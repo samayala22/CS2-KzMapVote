@@ -266,7 +266,7 @@ public partial class KzMapVote : BasePlugin {
 
         if (m_menu is not null)
         {
-            Core.MenusAPI.CloseMenu(m_menu);
+            try { Core.MenusAPI.CloseMenu(m_menu); } catch (InvalidOperationException) { }
             m_menu = null;
         }
 
