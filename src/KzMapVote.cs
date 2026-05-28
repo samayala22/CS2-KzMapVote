@@ -68,10 +68,14 @@ static class MapResolver
         if (input.All(char.IsDigit)) return (null, "Workshop IDs are no longer supported. Nominate by map name.");
 
         string? err;
-        (var matches, err) = await ApiGetMaps(http, name: input, limit: 2);
+        (var matches, err) = await ApiGetMaps(http, name: input);
         if (err is not null) return (null, err);
         if (matches.Count == 1) return (matches[0], null);
-        if (matches.Count > 1) return (null, "Multiple maps found.");
+        if (matches.Count > 1)
+        {
+            var exact = matches.FirstOrDefault(m => m.Name.Equals(input, StringComparison.OrdinalIgnoreCase));
+            return exact is not null ? (exact, null) : (null, "Multiple maps found.");
+        }
 
         if (!input.StartsWith("kz_")) return (null, "No maps found.");
 
